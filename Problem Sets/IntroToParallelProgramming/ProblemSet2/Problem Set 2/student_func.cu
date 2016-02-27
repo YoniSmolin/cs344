@@ -254,7 +254,8 @@ void allocateMemoryAndCopyToGPU(const size_t numRowsImage, const size_t numColsI
   //Copy the filter on the host (h_filter) to the memory you just allocated
   //on the GPU.  cudaMemcpy(dst, src, numBytes, cudaMemcpyHostToDevice);
   //Remember to use checkCudaErrors!
-
+  checkCudaErrors(cudaMalloc(&d_filter, sizeof(float) * filterWidth * filterWidth));
+  checkCudaErrors(cudaMemcpy(d_filter, h_filter, sizeof(float) * filterWidth * filterWidth, cudaMemcpyHostToDevice));
 }
 
 void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_inputImageRGBA,
@@ -275,12 +276,25 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
 	const dim3 gridSize(xDim, yDim, 1);
 
   //TODO: Launch a kernel for separating the RGBA image into different color channels
+	separateChannels << <gridSize, blockSize >> >(d_inputImageRGBA, numRows, numCols,
+		d_redBlurred,
+		d_greenBlurred,
+		d_blueBlurred);
 
   // Call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
   //TODO: Call your convolution kernel here 3 times, once for each color channel.
+  checkCudaErrors(cudaMemcpy(d_red, d_redBlurred, sizeof(unsigned char) * numCols * numRows, cudaMemcpyDeviceToDevice));
+  gaussian_blur << <gridSize, blockSize >> >(d_red, d_redBlurred, numRows, numCols, d_filter, filterWidth);
+  cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaMemcpy(d_blue, d_blueBlurred, sizeof(unsigned char) * numCols * numRows, cudaMemcpyDeviceToDevice));
+  gaussian_blur << <gridSize, blockSize >> >(d_blue, d_blueBlurred, numRows, numCols, d_filter, filterWidth);
+  cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaMemcpy(d_green, d_greenBlurred, sizeof(unsigned char) * numCols * numRows, cudaMemcpyDeviceToDevice));
+  gaussian_blur << <gridSize, blockSize >> >(d_green, d_greenBlurred, numRows, numCols, d_filter, filterWidth);
+  cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
   // Again, call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
