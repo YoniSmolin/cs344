@@ -22,3 +22,29 @@
 build
 bin
 
+# files
+*.suo
+*.csproj.*
+*.sdf
+*.opensdf
+*.ipch
+*.InstallLog
+
+UpgradeLog*.htm
+
+# folders
+$tf/
+_git/
+bin/
+obj/
+x64/
+x86/
+Debug/
+Release/
+.nuget/
+.vs/
+Externals/
+HandRendering/
+packages/
+bower_components/
+node_modules/

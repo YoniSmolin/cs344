@@ -108,6 +108,34 @@ void gaussian_blur(const unsigned char* const inputChannel,
                    int numRows, int numCols,
                    const float* const filter, const int filterWidth)
 {
+		//For every pixel in the image
+		int r = blockIdx.y * blockDim.y + threadIdx.y;
+		int c = blockIdx.x * blockDim.x + threadIdx.x;
+
+		if (c >= numCols || r >= numRows) return;
+
+		float result = 0.f;
+		//For every value in the filter around the pixel (c, r)
+		for (int filter_r = -filterWidth / 2; filter_r <= filterWidth / 2; ++filter_r) {
+			for (int filter_c = -filterWidth / 2; filter_c <= filterWidth / 2; ++filter_c) {
+				//Find the global image position for this filter position
+				//clamp to boundary of the image
+				int image_r = min(max(r + filter_r, 0), numRows - 1);
+				int image_c = min(max(c + filter_c, 0), numCols - 1);
+
+				float image_value = static_cast<float>(inputChannel[image_r * numCols + image_c]);
+				float filter_value = filter[(filter_r + filterWidth / 2) * filterWidth + filter_c + filterWidth / 2];
+
+				result += image_value * filter_value;
+
+				//  if (r==0 && c==0)
+				//      printf("%f\t",image_value);
+			}
+			// if (r==0 && c==0)
+			//     printf("\n");
+		}
+		outputChannel[r * numCols + c] = static_cast<unsigned char>(result);
+		// d_red does not contain the red image.    
   // TODO
   
   // NOTE: Be sure to compute any intermediate results in floating point
@@ -141,6 +169,22 @@ void separateChannels(const uchar4* const inputImageRGBA,
                       unsigned char* const greenChannel,
                       unsigned char* const blueChannel)
 {
+	const int2 thread_2D_pos = make_int2(blockIdx.x * blockDim.x + threadIdx.x,
+		blockIdx.y * blockDim.y + threadIdx.y);
+
+	const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
+
+	//make sure we don't try and access memory outside the image
+	//by having any threads mapped there return early
+	if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
+		return;
+
+	redChannel[thread_1D_pos] = inputImageRGBA[thread_1D_pos].x;
+	greenChannel[thread_1D_pos] = inputImageRGBA[thread_1D_pos].y;
+	blueChannel[thread_1D_pos] = inputImageRGBA[thread_1D_pos].z;
+
+	//if(thread_1D_pos==0)
+	//printf("The red value of the first pixel is %d",redChannel[thread_1D_pos]);
   // TODO
   //
   // NOTE: Be careful not to try to access memory that is outside the bounds of
@@ -220,13 +264,15 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
                         unsigned char *d_blueBlurred,
                         const int filterWidth)
 {
-  //TODO: Set reasonable block size (i.e., number of threads per block)
-  const dim3 blockSize;
+	//TODO: Set reasonable block size (i.e., number of threads per block)
+	const dim3 blockSize(557, 1, 1);
 
-  //TODO:
-  //Compute correct grid size (i.e., number of blocks per kernel launch)
-  //from the image size and and block size.
-  const dim3 gridSize;
+	//TODO:
+	//Compute correct grid size (i.e., number of blocks per kernel launch)
+	//from the image size and and block size.
+	int xDim = (numCols % blockSize.x == 0) ? (numCols / blockSize.x) : 1 + numCols / blockSize.x;
+	int yDim = (numRows % blockSize.y == 0) ? (numRows / blockSize.y) : 1 + numRows / blockSize.y;
+	const dim3 gridSize(xDim, yDim, 1);
 
   //TODO: Launch a kernel for separating the RGBA image into different color channels
 
