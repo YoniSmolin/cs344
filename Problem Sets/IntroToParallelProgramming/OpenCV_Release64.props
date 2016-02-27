@@ -9,7 +9,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(OPENCV_DIR)\lib\Release</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_ts310.lib;opencv_core310.lib;opencv_highgui310.lib;opencv_calib3d310.lib;opencv_imgcodecs310.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opencv_ts310.lib;opencv_core310.lib;opencv_highgui310.lib;opencv_calib3d310.lib;opencv_imgcodecs310.lib;kernel32.lib;opencv_imgproc310.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>
