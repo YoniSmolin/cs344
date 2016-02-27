@@ -30,6 +30,7 @@ bin
 *.ipch
 *.InstallLog
 *.pdb
+*.png
 
 UpgradeLog*.htm
 
