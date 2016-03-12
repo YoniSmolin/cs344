@@ -173,17 +173,9 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	MinMaxKernel << < 1, numRows / 2, columnSize >> > (d_localMinima, d_globalMinimum, false);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	float* h_localMaxima = new float[numRows];
-	checkCudaErrors(cudaMemcpy(h_localMaxima, d_localMaxima, columnSize, cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy(&max_logLum, d_globalMaximum, sizeof(float), cudaMemcpyDeviceToHost));
 
-	float* h_localMinima = new float[numRows];
-	checkCudaErrors(cudaMemcpy(h_localMinima, d_localMinima, columnSize, cudaMemcpyDeviceToHost));
-
-	float h_globalMaximum;
-	checkCudaErrors(cudaMemcpy(&h_globalMaximum, d_globalMaximum, sizeof(float), cudaMemcpyDeviceToHost));
-
-	float h_globalMinimum;
-	checkCudaErrors(cudaMemcpy(&h_globalMinimum, d_globalMinimum, sizeof(float), cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy(&min_logLum, d_globalMinimum, sizeof(float), cudaMemcpyDeviceToHost));
 
 }
 
