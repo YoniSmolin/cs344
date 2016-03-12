@@ -1,4 +1,4 @@
-/* Udacity Homework 3
+﻿/* Udacity Homework 3
    HDR Tone-mapping
 
   Background HDR
@@ -80,6 +80,42 @@
 */
 
 #include "utils.h"
+#include <limits>
+
+__global__ void MaxKernel(const float* inputArray, float* outputArray)
+{
+	// variables
+	extern __shared__ float shared[];
+
+	int arrayStride = blockDim.x * 2;
+	int arrayStartIndex = blockIdx.x * arrayStride;
+	int threadId = threadIdx.x;
+
+	// global → local
+	shared[threadId] = inputArray[arrayStartIndex + threadId];
+	shared[2 * threadId] = inputArray[arrayStartIndex + 2 * threadId];
+
+	__syncthreads();
+
+	ArrayMax(shared, arrayStride);
+
+	outputArray[blockIdx.x] = shared[0];
+}
+
+__device__ void ArrayMax(float* array, int arraySize)
+{
+	int threadId = threadIdx.x;
+
+	for (int activeThreads = arraySize / 2; activeThreads > 0; activeThreads /= 2)
+	{
+		if (threadId < activeThreads)
+		{
+			array[threadId] = std::max(array[threadId], array[activeThreads + threadId]);
+			__syncthreads();
+		}
+	}
+
+}
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
