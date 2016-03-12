@@ -83,6 +83,8 @@
 #include <limits>
 
 // forward declarations
+void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols);
+
 __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax);
 
 __global__ void MinMaxKernel(const float* inputArray, float* outputArray, bool computeMax)
@@ -149,15 +151,19 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	assert(numCols % 2 == 0 && numRows % 2 == 0);
 
 	// step 1 - minimum and maximum
+	FindMinMax(d_logLuminance, min_logLum, max_logLum, numRows, numCols);
+}
 
+void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols)
+{
 	size_t rowSize = (size_t)(numCols * sizeof(float));
 	size_t columnSize = (size_t)(numRows * sizeof(float));
-	
+
 	float* d_localMaxima;
 	float* d_globalMaximum;
 	float* d_localMinima;
 	float* d_globalMinimum;
-	
+
 	checkCudaErrors(cudaMalloc(&d_localMaxima, columnSize));
 	checkCudaErrors(cudaMalloc(&d_globalMaximum, sizeof(float)));
 	checkCudaErrors(cudaMalloc(&d_localMinima, columnSize));
@@ -176,6 +182,4 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMemcpy(&max_logLum, d_globalMaximum, sizeof(float), cudaMemcpyDeviceToHost));
 
 	checkCudaErrors(cudaMemcpy(&min_logLum, d_globalMinimum, sizeof(float), cudaMemcpyDeviceToHost));
-
 }
-
