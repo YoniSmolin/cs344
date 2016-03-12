@@ -82,7 +82,10 @@
 #include "utils.h"
 #include <limits>
 
-__global__ void MaxKernel(const float* inputArray, float* outputArray)
+// forward declarations
+__device__ void ArrayMinMax(float* array, int arraySize, bool computeMax);
+
+__global__ void MinMaxKernel(const float* inputArray, float* outputArray, bool computeMax)
 {
 	// variables
 	extern __shared__ float shared[];
@@ -93,16 +96,16 @@ __global__ void MaxKernel(const float* inputArray, float* outputArray)
 
 	// global → local
 	shared[threadId] = inputArray[arrayStartIndex + threadId];
-	shared[2 * threadId] = inputArray[arrayStartIndex + 2 * threadId];
+	shared[arrayStride / 2 + threadId] = inputArray[arrayStartIndex + arrayStride / 2 + threadId];
 
 	__syncthreads();
 
-	ArrayMax(shared, arrayStride);
+	ArrayMinMax(shared, arrayStride, computeMax);
 
 	outputArray[blockIdx.x] = shared[0];
 }
 
-__device__ void ArrayMax(float* array, int arraySize)
+__device__ void ArrayMinMax(float* array, int arraySize, bool computeMax)
 {
 	int threadId = threadIdx.x;
 
@@ -110,7 +113,12 @@ __device__ void ArrayMax(float* array, int arraySize)
 	{
 		if (threadId < activeThreads)
 		{
-			array[threadId] = std::max(array[threadId], array[activeThreads + threadId]);
+			auto firstValue = array[threadId];
+			auto secondValue = array[activeThreads + threadId];
+			if (computeMax)
+				array[threadId] = firstValue > secondValue ? firstValue : secondValue;
+			else
+				array[threadId] = firstValue < secondValue ? firstValue : secondValue;
 			__syncthreads();
 		}
 	}
@@ -135,6 +143,23 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     4) Perform an exclusive scan (prefix sum) on the histogram to get
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)       */
+
+	// step 0 - check assumptions
+
+	assert(numCols % 2 == 0);
+
+	// step 1 - minimum and maximum
+
+	size_t rowSize = (size_t)(numCols * sizeof(float));
+	size_t columnSize = (size_t)(numRows * sizeof(float));
+	float* d_localMaxima;
+	checkCudaErrors(cudaMalloc(&d_localMaxima, columnSize));
+	
+	MinMaxKernel << < numRows, numCols / 2, rowSize >> > (d_logLuminance, d_localMaxima, true);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	float* h_localMaxima = new float[numCols];
+	checkCudaErrors(cudaMemcpy(h_localMaxima, d_localMaxima, columnSize, cudaMemcpyDeviceToHost));
 
 
 }
