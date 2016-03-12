@@ -31,6 +31,7 @@ bin
 *.InstallLog
 *.pdb
 *.png
+.gitignore
 
 UpgradeLog*.htm
 
@@ -50,3 +51,4 @@ HandRendering/
 packages/
 bower_components/
 node_modules/
+*.user
