@@ -146,20 +146,44 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
 	// step 0 - check assumptions
 
-	assert(numCols % 2 == 0);
+	assert(numCols % 2 == 0 && numRows % 2 == 0);
 
 	// step 1 - minimum and maximum
 
 	size_t rowSize = (size_t)(numCols * sizeof(float));
 	size_t columnSize = (size_t)(numRows * sizeof(float));
-	float* d_localMaxima;
-	checkCudaErrors(cudaMalloc(&d_localMaxima, columnSize));
 	
+	float* d_localMaxima;
+	float* d_globalMaximum;
+	float* d_localMinima;
+	float* d_globalMinimum;
+	
+	checkCudaErrors(cudaMalloc(&d_localMaxima, columnSize));
+	checkCudaErrors(cudaMalloc(&d_globalMaximum, sizeof(float)));
+	checkCudaErrors(cudaMalloc(&d_localMinima, columnSize));
+	checkCudaErrors(cudaMalloc(&d_globalMinimum, sizeof(float)));
+
 	MinMaxKernel << < numRows, numCols / 2, rowSize >> > (d_logLuminance, d_localMaxima, true);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	MinMaxKernel << < 1, numRows / 2, columnSize >> > (d_localMaxima, d_globalMaximum, true);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	float* h_localMaxima = new float[numCols];
+	MinMaxKernel << < numRows, numCols / 2, rowSize >> > (d_logLuminance, d_localMinima, false);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	MinMaxKernel << < 1, numRows / 2, columnSize >> > (d_localMinima, d_globalMinimum, false);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	float* h_localMaxima = new float[numRows];
 	checkCudaErrors(cudaMemcpy(h_localMaxima, d_localMaxima, columnSize, cudaMemcpyDeviceToHost));
 
+	float* h_localMinima = new float[numRows];
+	checkCudaErrors(cudaMemcpy(h_localMinima, d_localMinima, columnSize, cudaMemcpyDeviceToHost));
+
+	float h_globalMaximum;
+	checkCudaErrors(cudaMemcpy(&h_globalMaximum, d_globalMaximum, sizeof(float), cudaMemcpyDeviceToHost));
+
+	float h_globalMinimum;
+	checkCudaErrors(cudaMemcpy(&h_globalMinimum, d_globalMinimum, sizeof(float), cudaMemcpyDeviceToHost));
 
 }
+
