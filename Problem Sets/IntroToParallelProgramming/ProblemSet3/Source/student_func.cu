@@ -84,10 +84,10 @@
 
 // forward declarations
 void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols);
-
+void ComputeHistogram(const float* const d_logLuminance, unsigned int* d_histogram, float min_logLum, float lumRange, const size_t numRows, const size_t numCols, const size_t numBins);
 __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax);
 
-__global__ void MinMaxKernel(const float* inputArray, float* outputArray, bool computeMax)
+__global__ void MinMaxKernel(const float* const inputArray, float* outputArray, bool computeMax)
 {
 	// variables
 	extern __shared__ float shared[];
@@ -127,6 +127,17 @@ __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax)
 
 }
 
+__global__ void FillHistogramTable(const float* const d_logLuminance, unsigned int* d_histogtam, float min_logLum, float lumRange, size_t numBins)
+{
+	unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+
+	float luminance = d_logLuminance[index];
+
+	unsigned int binIndex = (unsigned int)(numBins * (luminance - min_logLum) / lumRange);
+
+	atomicAdd(&d_histogtam[binIndex], 1);
+}
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -152,6 +163,16 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
 	// step 1 - minimum and maximum
 	FindMinMax(d_logLuminance, min_logLum, max_logLum, numRows, numCols);
+
+	// step 2 - compute histogram
+	size_t histogramSize = (size_t)(numBins * sizeof(unsigned int));
+
+	unsigned int* d_histogram;
+	checkCudaErrors(cudaMalloc(&d_histogram, histogramSize));
+
+	ComputeHistogram(d_logLuminance, d_histogram, min_logLum, max_logLum - min_logLum, numRows, numCols, numBins);
+
+	checkCudaErrors(cudaFree(d_histogram));
 }
 
 void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols)
@@ -182,4 +203,19 @@ void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max
 	checkCudaErrors(cudaMemcpy(&max_logLum, d_globalMaximum, sizeof(float), cudaMemcpyDeviceToHost));
 
 	checkCudaErrors(cudaMemcpy(&min_logLum, d_globalMinimum, sizeof(float), cudaMemcpyDeviceToHost));
+
+	checkCudaErrors(cudaFree(d_localMaxima));
+	checkCudaErrors(cudaFree(d_globalMaximum));
+	checkCudaErrors(cudaFree(d_localMinima));
+	checkCudaErrors(cudaFree(d_globalMinimum));
+}
+
+void ComputeHistogram(const float* const d_logLuminance, unsigned int* d_histogram, float min_logLum, float lumRange, const size_t numRows, const size_t numCols, const size_t numBins)
+{
+	size_t histogramSize = (size_t)(numBins * sizeof(unsigned int));
+
+	checkCudaErrors(cudaMemset(d_histogram, 0, histogramSize));
+
+	FillHistogramTable << < numRows, numCols >> > (d_logLuminance, d_histogram, min_logLum, lumRange, numBins);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 }
