@@ -83,8 +83,9 @@
 #include <limits>
 
 // forward declarations
-void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols);
-void ComputeHistogram(const float* const d_logLuminance, unsigned int* d_histogram, float min_logLum, float lumRange, const size_t numRows, const size_t numCols, const size_t numBins);
+void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, unsigned int numRows, unsigned int numCols);
+void ComputeHistogram(const float* const d_logLuminance, unsigned int* const d_histogram, float min_logLum, float lumRange, unsigned int numRows, unsigned int numCols, const size_t numBins);
+void ComputeCDF(const unsigned int* const d_histogram, unsigned int* const d_cdf, unsigned int numBins);
 __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax);
 
 __global__ void MinMaxKernel(const float* const inputArray, float* outputArray, bool computeMax)
@@ -121,8 +122,8 @@ __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax)
 				array[threadId] = firstValue > secondValue ? firstValue : secondValue;
 			else
 				array[threadId] = firstValue < secondValue ? firstValue : secondValue;
-			__syncthreads();
 		}
+		__syncthreads();
 	}
 
 }
@@ -133,9 +134,29 @@ __global__ void FillHistogramTable(const float* const d_logLuminance, unsigned i
 
 	float luminance = d_logLuminance[index];
 
-	unsigned int binIndex = (unsigned int)(numBins * (luminance - min_logLum) / lumRange);
+	unsigned int binIndex = (unsigned int)((numBins-1) * (luminance - min_logLum) / lumRange);
 
 	atomicAdd(&d_histogtam[binIndex], 1);
+}
+
+__global__ void BlellochScanReduce(const unsigned int* const d_histogram, unsigned int* const d_cdf)
+{
+	auto numBins = blockDim.x * 2;
+	auto threadId = 2*threadIdx.x + 1;
+
+	d_cdf[threadId] = d_histogram[threadId];
+	d_cdf[threadId - 1] = d_histogram[threadId - 1];
+
+	for (auto leaves = 2; leaves <= numBins; leaves *= 2)
+	{
+		if (threadId % leaves == leaves - 1)
+		{
+			auto right = d_cdf[threadId];
+			auto left = d_cdf[threadId - leaves/2];
+			d_cdf[threadId] = right + left;
+		}
+		__syncthreads();
+	}
 }
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -162,7 +183,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	assert(numCols % 2 == 0 && numRows % 2 == 0);
 
 	// step 1 - minimum and maximum
-	FindMinMax(d_logLuminance, min_logLum, max_logLum, numRows, numCols);
+	FindMinMax(d_logLuminance, min_logLum, max_logLum, (unsigned int)numRows, (unsigned int)numCols);
 
 	// step 2 - compute histogram
 	size_t histogramSize = (size_t)(numBins * sizeof(unsigned int));
@@ -170,15 +191,21 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	unsigned int* d_histogram;
 	checkCudaErrors(cudaMalloc(&d_histogram, histogramSize));
 
-	ComputeHistogram(d_logLuminance, d_histogram, min_logLum, max_logLum - min_logLum, numRows, numCols, numBins);
+	ComputeHistogram(d_logLuminance, d_histogram, min_logLum, max_logLum - min_logLum, (unsigned int)numRows, (unsigned int)numCols, numBins);
 
+	auto h_histogram = new unsigned int[numBins];
+	checkCudaErrors(cudaMemcpy(h_histogram, d_histogram, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
+	delete[] h_histogram;
+
+	// step 3 - compute cdf
+	ComputeCDF(d_histogram, d_cdf, (unsigned int)numBins);
 	checkCudaErrors(cudaFree(d_histogram));
 }
 
-void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, const size_t numRows, const size_t numCols)
+void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max_logLum, unsigned int numRows, unsigned int numCols)
 {
-	size_t rowSize = (size_t)(numCols * sizeof(float));
-	size_t columnSize = (size_t)(numRows * sizeof(float));
+	unsigned int rowSize = (unsigned int)(numCols * sizeof(float));
+	unsigned int columnSize = (unsigned int)(numRows * sizeof(float));
 
 	float* d_localMaxima;
 	float* d_globalMaximum;
@@ -210,7 +237,7 @@ void FindMinMax(const float* const d_logLuminance, float &min_logLum, float &max
 	checkCudaErrors(cudaFree(d_globalMinimum));
 }
 
-void ComputeHistogram(const float* const d_logLuminance, unsigned int* d_histogram, float min_logLum, float lumRange, const size_t numRows, const size_t numCols, const size_t numBins)
+void ComputeHistogram(const float* const d_logLuminance, unsigned int* const d_histogram, float min_logLum, float lumRange, unsigned int numRows, unsigned int numCols, size_t numBins)
 {
 	size_t histogramSize = (size_t)(numBins * sizeof(unsigned int));
 
@@ -218,4 +245,15 @@ void ComputeHistogram(const float* const d_logLuminance, unsigned int* d_histogr
 
 	FillHistogramTable << < numRows, numCols >> > (d_logLuminance, d_histogram, min_logLum, lumRange, numBins);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+}
+
+void ComputeCDF(const unsigned int* const d_histogram, unsigned int* const d_cdf, unsigned int numBins)
+{
+	// phase 1 - Reduce
+	BlellochScanReduce << < 1, numBins/2 >> > (d_histogram, d_cdf);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	auto h_reduceResults = new unsigned int[numBins];
+	checkCudaErrors(cudaMemcpy(h_reduceResults, d_cdf, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
+	delete[] h_reduceResults;
 }
