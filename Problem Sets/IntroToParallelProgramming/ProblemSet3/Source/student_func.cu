@@ -135,7 +135,7 @@ __global__ void FillHistogramTable(const float* const d_logLuminance, unsigned i
 
 	float luminance = d_logLuminance[index];
 
-	unsigned int binIndex = (unsigned int)((numBins-1) * (luminance - min_logLum) / lumRange);
+	unsigned int binIndex = (unsigned int)((numBins) * (luminance - min_logLum) / lumRange);
 
 	atomicAdd(&d_histogtam[binIndex], 1);
 }
