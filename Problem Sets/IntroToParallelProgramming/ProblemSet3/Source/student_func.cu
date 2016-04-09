@@ -88,6 +88,7 @@ void ComputeHistogram(const float* const d_logLuminance, unsigned int* const d_h
 void ComputeCDF(const unsigned int* const d_histogram, unsigned int* const d_cdf, unsigned int numBins);
 __device__ void ArrayMinMax(float* array, int arraySize, bool computeMax);
 
+// CUDA kernels
 __global__ void MinMaxKernel(const float* const inputArray, float* outputArray, bool computeMax)
 {
 	// variables
@@ -159,6 +160,27 @@ __global__ void BlellochScanReduce(const unsigned int* const d_histogram, unsign
 	}
 }
 
+__global__ void BlellochScanDownSweep(unsigned int* d_cdf)
+{
+	auto numBins = blockDim.x * 2;
+	auto threadId = 2 * threadIdx.x + 1;
+
+	if (threadId == numBins - 1) d_cdf[threadId] = 0; // set last value in CDF to zero
+
+	for (auto leaves = numBins; leaves >= 2; leaves /= 2)
+	{
+		if (threadId % leaves == leaves - 1)
+		{
+			auto right = d_cdf[threadId];
+			auto left = d_cdf[threadId - leaves / 2];
+			d_cdf[threadId] = right + left;
+			d_cdf[threadId - leaves / 2] = right;
+		}
+		__syncthreads();
+	}
+}
+
+// kernel wrapper implementations
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -193,9 +215,9 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
 	ComputeHistogram(d_logLuminance, d_histogram, min_logLum, max_logLum - min_logLum, (unsigned int)numRows, (unsigned int)numCols, numBins);
 
-	auto h_histogram = new unsigned int[numBins];
-	checkCudaErrors(cudaMemcpy(h_histogram, d_histogram, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
-	delete[] h_histogram;
+	//auto h_histogram = new unsigned int[numBins];
+	//checkCudaErrors(cudaMemcpy(h_histogram, d_histogram, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
+	//delete[] h_histogram;
 
 	// step 3 - compute cdf
 	ComputeCDF(d_histogram, d_cdf, (unsigned int)numBins);
@@ -253,7 +275,11 @@ void ComputeCDF(const unsigned int* const d_histogram, unsigned int* const d_cdf
 	BlellochScanReduce << < 1, numBins/2 >> > (d_histogram, d_cdf);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	auto h_reduceResults = new unsigned int[numBins];
-	checkCudaErrors(cudaMemcpy(h_reduceResults, d_cdf, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
-	delete[] h_reduceResults;
+	// phase 2 - down sweep
+	BlellochScanDownSweep << < 1, numBins / 2 >> > (d_cdf);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	//auto h_reduceResults = new unsigned int[numBins];
+	//checkCudaErrors(cudaMemcpy(h_reduceResults, d_cdf, sizeof(unsigned int) * numBins, cudaMemcpyDeviceToHost));
+	//delete[] h_reduceResults;
 }
