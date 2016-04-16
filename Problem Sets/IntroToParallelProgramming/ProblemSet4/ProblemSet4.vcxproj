@@ -10,9 +10,37 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="Source\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Source\compare.cpp" />
+    <ClCompile Include="Source\loadSaveImage.cpp" />
+    <ClCompile Include="Source\main.cpp" />
+    <ClCompile Include="Source\reference_calc.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\compare.h" />
+    <ClInclude Include="Source\loadSaveImage.h" />
+    <ClInclude Include="Source\reference_calc.h" />
+    <ClInclude Include="Source\timer.h" />
+    <ClInclude Include="Source\utils.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="Source\HW4.cu" />
+    <CudaCompile Include="Source\student_func.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Source\Makefile" />
+    <None Include="Source\red_eye_effect.gold" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Source\red_eye_effect_5.jpg" />
+    <Image Include="Source\red_eye_effect_template_5.jpg" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{EAC53EF8-7A4F-4C58-99BC-D88710E71CFC}</ProjectGuid>
-    <RootNamespace>ProblemSet3</RootNamespace>
+    <ProjectGuid>{90EF39CC-678D-418E-83B4-7FDA46B29EB3}</ProjectGuid>
+    <RootNamespace>ProblemSet4</RootNamespace>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -84,29 +112,14 @@ copy /Y "$(OPENCV_DIR)\x64\vc12\bin\opencv_world310.dll" "$(TargetDir)"</Command
     </Link>
     <PostBuildEvent>
       <Command>echo copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
-copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
+copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"
+echo copy /Y "$(OPENCV_DIR)\x64\vc12\bin\opencv_world310.dll" "$(TargetDir)"
+copy /Y "$(OPENCV_DIR)\x64\vc12\bin\opencv_world310.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
     </CudaCompile>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <CudaCompile Include="Source\HW3.cu" />
-    <CudaCompile Include="Source\student_func.cu" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="Source\compare.cpp" />
-    <ClCompile Include="Source\loadSaveImage.cpp" />
-    <ClCompile Include="Source\main.cpp" />
-    <ClCompile Include="Source\reference_calc.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="Source\compare.h" />
-    <ClInclude Include="Source\loadSaveImage.h" />
-    <ClInclude Include="Source\reference_calc.h" />
-    <ClInclude Include="Source\timer.h" />
-    <ClInclude Include="Source\utils.h" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 7.5.targets" />

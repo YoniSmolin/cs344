@@ -5,15 +5,15 @@
   <PropertyGroup />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>$(OPENCV_DIR)\install\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(OPENCV_DIR)\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>$(OPENCV_DIR)\lib\Release</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_ts310.lib;opencv_core310.lib;opencv_highgui310.lib;opencv_calib3d310.lib;opencv_imgcodecs310.lib;kernel32.lib;opencv_imgproc310.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OPENCV_DIR)\x64\vc12\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>kernel32.lib;opencv_world310.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>
-      </Command>
+      <Command>echo copy /Y "$(OPENCV_DIR)\x64\vc12\bin\opencv_world310.dll" "$(TargetDir)"
+copy /Y "$(OPENCV_DIR)\x64\vc12\bin\opencv_world310.dll" "$(TargetDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup />
