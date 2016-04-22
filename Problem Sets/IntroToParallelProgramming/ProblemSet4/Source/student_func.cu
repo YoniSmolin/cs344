@@ -41,13 +41,24 @@ at the end.
 #include "utils.h"
 #include <thrust/host_vector.h>
 
+//////////////////////////////// Forward Declerations ///////////////////
+__device__ void ComputeBinaryPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, const unsigned int filter, const bool parity, const size_t numElems);
+__device__ void HillisSteele_InclusiveSum_BlockScan(const unsigned int* const sourceArray, unsigned int* const targetArray, const size_t numElems);
+
 //////////////////////////////// Constants //////////////////////////////
 const unsigned int THREADS_PER_BLOCK = 512;
 const bool PARITY_EVEN = true;
 const bool PARITY_ODD = false;
 
 /////////////////////////////// CUDA Kernels ////////////////////////////
-__global__ void ComputeBinaryPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, const unsigned int filter, const bool parity, const size_t numElems)
+__global__ void ScanAccordingToPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, unsigned int* const outputScannedArray, const unsigned int filter, const bool parity, const size_t numElems)
+{
+	ComputeBinaryPredicate(inputValues, outputPredicates, filter, parity, numElems);
+	HillisSteele_InclusiveSum_BlockScan(outputPredicates, outputScannedArray, numElems);
+}
+
+/////////////////////////////// CUDA Device Methods /////////////////////
+__device__ void ComputeBinaryPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, const unsigned int filter, const bool parity, const size_t numElems)
 {
 	unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
 	if (index < numElems)
@@ -58,7 +69,7 @@ __global__ void ComputeBinaryPredicate(const unsigned int* const inputValues, un
 	}
 }
 
-__global__ void HillisSteele_InclusiveSum_BlockScan(const unsigned int* const sourceArray, unsigned int* const targetArray, const size_t numElems)
+__device__ void HillisSteele_InclusiveSum_BlockScan(const unsigned int* const sourceArray, unsigned int* const targetArray, const size_t numElems)
 {
 	auto blockSize = blockDim.x;
 	auto threadId = threadIdx.x;
@@ -101,13 +112,11 @@ void your_sort(unsigned int* const d_inputVals,
 	{
 		unsigned int filter = 1 << i;
 		
-		// gather even values
-		ComputeBinaryPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, filter, PARITY_EVEN, numElems);
-		
-		// inclusive sum-scan (which will be treated as exclusive because both contain the same information)
-		HillisSteele_InclusiveSum_BlockScan << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_predicates, d_targetIndices, numElems);
+		// Handle zeros
+		ScanAccordingToPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, d_targetIndices, filter, PARITY_EVEN, numElems);
 
-		// gather odd values
+		// Handle ones
+
 		break;
 	}
 
