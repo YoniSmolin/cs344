@@ -51,10 +51,18 @@ const bool PARITY_EVEN = true;
 const bool PARITY_ODD = false;
 
 /////////////////////////////// CUDA Kernels ////////////////////////////
-__global__ void ScanAccordingToPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, unsigned int* const outputScannedArray, const unsigned int filter, const bool parity, const size_t numElems)
+__global__ void BlockScan_AccordingToPredicate(const unsigned int* const inputValues, unsigned int* const outputPredicates, unsigned int* const outputScannedArray, const unsigned int filter, const bool parity, const size_t numElems)
 {
 	ComputeBinaryPredicate(inputValues, outputPredicates, filter, parity, numElems);
 	HillisSteele_InclusiveSum_BlockScan(outputPredicates, outputScannedArray, numElems);
+}
+
+__global__ void ComputeBlockScanOffsets(const unsigned int* const indices, unsigned int* const offsets, const unsigned int threadsPerBlock)
+{
+	auto threadId = threadIdx.x;
+
+	offsets[threadId] = indices[threadsPerBlock-1 + (threadsPerBlock * threadId)];
+	HillisSteele_InclusiveSum_BlockScan(offsets, offsets, blockDim.x);
 }
 
 /////////////////////////////// CUDA Device Methods /////////////////////
@@ -105,15 +113,20 @@ void your_sort(unsigned int* const d_inputVals,
 
 	unsigned int* d_predicates;
 	unsigned int* d_targetIndices;
+	unsigned int* d_targetOffsets;
 	checkCudaErrors(cudaMalloc(&d_predicates, sizeof(unsigned int) * numElems));
 	checkCudaErrors(cudaMalloc(&d_targetIndices, sizeof(unsigned int) * numElems));
+	checkCudaErrors(cudaMalloc(&d_targetOffsets, sizeof(unsigned int) * (numberOfBlocks - 1)));
 
 	for (unsigned int i = 0; i < bitsInUnsignedInt; i++)
 	{
 		unsigned int filter = 1 << i;
 		
 		// Handle zeros
-		ScanAccordingToPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, d_targetIndices, filter, PARITY_EVEN, numElems);
+		BlockScan_AccordingToPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, d_targetIndices, filter, PARITY_EVEN, numElems);
+		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+		assert(numberOfBlocks > 0);
+		ComputeBlockScanOffsets << < 1, numberOfBlocks-1 >> > (d_targetIndices, d_targetOffsets, THREADS_PER_BLOCK);
 
 		// Handle ones
 
@@ -126,10 +139,15 @@ void your_sort(unsigned int* const d_inputVals,
 	checkCudaErrors(cudaMemcpy(h_inputValues, d_inputVals, sizeof(unsigned int) * numElems, cudaMemcpyDeviceToHost));
 	unsigned int* h_targetIndices = new unsigned int[numElems];
 	checkCudaErrors(cudaMemcpy(h_targetIndices, d_targetIndices, sizeof(unsigned int) * numElems, cudaMemcpyDeviceToHost));
+	unsigned int* h_targetOffsets = new unsigned int[numberOfBlocks - 1];
+	checkCudaErrors(cudaMemcpy(h_targetOffsets, d_targetOffsets, sizeof(unsigned int) * (numberOfBlocks-1), cudaMemcpyDeviceToHost));
 
 	delete[] h_predicates;
 	delete[] h_inputValues;
 	delete[] h_targetIndices;
+	delete[] h_targetOffsets;
 
 	checkCudaErrors(cudaFree(d_predicates));
+	checkCudaErrors(cudaFree(d_targetOffsets));
+	checkCudaErrors(cudaFree(d_targetIndices));
 }
