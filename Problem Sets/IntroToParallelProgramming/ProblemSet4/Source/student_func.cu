@@ -61,7 +61,7 @@ __global__ void BlockScan_AccordingToPredicate(const unsigned int* const inputVa
 	HillisSteele_InclusiveSum_BlockScan(outputPredicates, outputScannedArray, numElems);
 }
 
-__global__ void ComputeBlockScanOffsets(const unsigned int* const indices, unsigned int* const offsets, const unsigned int threadsPerBlock, const size_t numElems)
+__global__ void ComputeBlockScanOffsets(const unsigned int* const indices, unsigned int* const offsets, const unsigned int threadsPerBlock, const bool parity, const size_t numElems)
 {
 	auto threadId = threadIdx.x;
 	auto blockSize = blockDim.x;
@@ -69,7 +69,7 @@ __global__ void ComputeBlockScanOffsets(const unsigned int* const indices, unsig
 	offsets[threadId] = indices[threadsPerBlock-1 + (threadsPerBlock * threadId)];
 	HillisSteele_InclusiveSum_BlockScan(offsets, offsets, blockSize);
 
-	d_globalOffset = offsets[blockSize-1] + indices[numElems-1];
+	if (parity) d_globalOffset = offsets[blockSize-1] + indices[numElems-1];
 }
 
 __global__ void Scatter_AccordingToScan(const unsigned int* const inputVals, const unsigned int* const inputPos, unsigned int* const outputVals, unsigned int* const outputPos,
@@ -152,22 +152,22 @@ void your_sort(unsigned int* const d_inputVals,
 		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 		
 		assert(numberOfBlocks > 0);
-		ComputeBlockScanOffsets << < 1, numberOfBlocks-1 >> > (d_targetIndices, d_targetOffsets, THREADS_PER_BLOCK, numElems);
+		ComputeBlockScanOffsets << < 1, numberOfBlocks - 1 >> > (d_targetIndices, d_targetOffsets, THREADS_PER_BLOCK, PARITY_EVEN, numElems);
 		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 		Scatter_AccordingToScan << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_inputPos, d_outputVals, d_outputPos, d_targetIndices, d_targetOffsets, d_predicates, PARITY_EVEN, numElems);
 		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-		//// Handle ones
-		//BlockScan_AccordingToPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, d_targetIndices, filter, PARITY_ODD, numElems);
-		//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+		// Handle ones
+		BlockScan_AccordingToPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, d_targetIndices, filter, PARITY_ODD, numElems);
+		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-		//assert(numberOfBlocks > 0);
-		//ComputeBlockScanOffsets << < 1, numberOfBlocks - 1 >> > (d_targetIndices, d_targetOffsets, THREADS_PER_BLOCK, numElems);
-		//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+		assert(numberOfBlocks > 0);
+		ComputeBlockScanOffsets << < 1, numberOfBlocks - 1 >> > (d_targetIndices, d_targetOffsets, THREADS_PER_BLOCK, PARITY_ODD, numElems);
+		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-		//Scatter_AccordingToScan << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_inputPos, d_outputVals, d_outputPos, d_targetIndices, d_targetOffsets, d_predicates, PARITY_ODD, numElems);
-		//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+		Scatter_AccordingToScan << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_inputPos, d_outputVals, d_outputPos, d_targetIndices, d_targetOffsets, d_predicates, PARITY_ODD, numElems);
+		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 		break;
 	}
