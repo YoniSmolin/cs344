@@ -58,6 +58,28 @@ __global__ void ComputeBinaryPredicate(const unsigned int* const inputValues, un
 	}
 }
 
+__global__ void HillisSteele_InclusiveSum_BlockScan(const unsigned int* const sourceArray, unsigned int* const targetArray, const size_t numElems)
+{
+	auto blockSize = blockDim.x;
+	auto threadId = threadIdx.x;
+	auto offset = blockIdx.x * blockSize;
+	auto globalIndex = offset + threadId;
+
+	if (globalIndex < numElems)
+	{
+		targetArray[globalIndex] = sourceArray[globalIndex];
+		for (auto leaves = 1; leaves < blockSize; leaves *= 2)
+		{
+			if (threadId >= leaves)
+			{
+				auto right = targetArray[globalIndex];
+				auto left = targetArray[globalIndex - leaves];
+				targetArray[globalIndex] = right + left;
+			}
+			__syncthreads();
+		}
+	}
+}
 
 /////////////////////////////// Sort Function ///////////////////////////
 void your_sort(unsigned int* const d_inputVals,
@@ -71,7 +93,9 @@ void your_sort(unsigned int* const d_inputVals,
 	unsigned int numberOfBlocks = (numElems + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
 	unsigned int* d_predicates;
+	unsigned int* d_targetIndices;
 	checkCudaErrors(cudaMalloc(&d_predicates, sizeof(unsigned int) * numElems));
+	checkCudaErrors(cudaMalloc(&d_targetIndices, sizeof(unsigned int) * numElems));
 
 	for (unsigned int i = 0; i < bitsInUnsignedInt; i++)
 	{
@@ -79,6 +103,9 @@ void your_sort(unsigned int* const d_inputVals,
 		
 		// gather even values
 		ComputeBinaryPredicate << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_inputVals, d_predicates, filter, PARITY_EVEN, numElems);
+		
+		// inclusive sum-scan (which will be treated as exclusive because both contain the same information)
+		HillisSteele_InclusiveSum_BlockScan << < numberOfBlocks, THREADS_PER_BLOCK >> > (d_predicates, d_targetIndices, numElems);
 
 		// gather odd values
 		break;
@@ -88,7 +115,12 @@ void your_sort(unsigned int* const d_inputVals,
 	checkCudaErrors(cudaMemcpy(h_predicates, d_predicates, sizeof(unsigned int) * numElems, cudaMemcpyDeviceToHost));
 	unsigned int* h_inputValues = new unsigned int[numElems];
 	checkCudaErrors(cudaMemcpy(h_inputValues, d_inputVals, sizeof(unsigned int) * numElems, cudaMemcpyDeviceToHost));
-	
-	checkCudaErrors(cudaFree(d_predicates));
+	unsigned int* h_targetIndices = new unsigned int[numElems];
+	checkCudaErrors(cudaMemcpy(h_targetIndices, d_targetIndices, sizeof(unsigned int) * numElems, cudaMemcpyDeviceToHost));
+
 	delete[] h_predicates;
+	delete[] h_inputValues;
+	delete[] h_targetIndices;
+
+	checkCudaErrors(cudaFree(d_predicates));
 }
