@@ -16,6 +16,7 @@
 #include <thrust/random/uniform_int_distribution.h>
 
 #include "reference_calc.h"
+#include "cuda_profiler_api.h"
 
 void computeHistogram(const unsigned int *const d_vals,
                       unsigned int* const d_histo,
@@ -87,6 +88,8 @@ int main(void)
 
   //Now do the comparison
   checkResultsExact(h_refHisto, h_studentHisto, numBins);
+
+  cudaProfilerStop();
 
   delete[] h_vals;
   delete[] h_refHisto;

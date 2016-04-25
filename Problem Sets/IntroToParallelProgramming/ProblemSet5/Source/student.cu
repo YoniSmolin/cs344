@@ -64,6 +64,45 @@ __global__ void SingleBlockPerBin_SharedMemReduction(const unsigned int* const v
 	if (threadId == 0) histo[binId] = totalSum;
 }
 
+__global__ void Segmented_SharedMemReduction(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
+{
+	extern __shared__ unsigned int localHistogram[];
+
+	for (unsigned int i = 0; i < numBins; i++) localHistogram[i] = 0;
+
+	unsigned int blockId = blockIdx.x;
+	unsigned int numBlocks = gridDim.x;
+	unsigned int segmentSize = numElems / numBlocks;
+	unsigned int startIndex = segmentSize * blockId;
+	unsigned int endIndex = startIndex + segmentSize;
+
+	for (unsigned int i = startIndex; i < endIndex; i++) localHistogram[vals[i]]++;
+
+	for (unsigned int i = 0; i < numBins; i++) atomicAdd(&histo[i], localHistogram[i]);
+}
+
+__global__ void Segmented_SharedMemReduction2(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
+{
+	extern __shared__ unsigned int localHistogram[];
+
+	unsigned int blockSize = blockDim.x;
+	unsigned int threadId = threadIdx.x;
+
+	for (unsigned int i = 0; i < numBins; i += blockSize ) localHistogram[i + threadId] = 0;
+
+	__syncthreads();
+
+	unsigned int segmentSize = numElems / gridDim.x;
+	unsigned int startIndex = segmentSize * blockIdx.x;
+	unsigned int endIndex = startIndex + segmentSize;
+
+	for (unsigned int i = startIndex; i < endIndex; i += blockSize) atomicAdd(&localHistogram[vals[i + threadId]], 1);
+
+	__syncthreads();
+
+	for (unsigned int i = 0; i < numBins; i += blockSize) atomicAdd(&histo[i+threadId], localHistogram[i+threadId]);
+}
+
 /////////////////////////////// CUDA Device Methods /////////////////////
 __device__ void Reduce(unsigned int* const array)
 {
@@ -89,7 +128,11 @@ void computeHistogram(const unsigned int* const d_vals, unsigned int* const d_hi
 	//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 	// 2nd attemept - 1024 blocks X 1024 threads - each block responsible of a different bin, with reduction in shared memory
-	assert(1024 * (numElems / 1024) == numElems);
-	SingleBlockPerBin_SharedMemReduction << < numBins, 1024, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
+	//assert(1024 * (numElems / 1024) == numElems);
+	//SingleBlockPerBin_SharedMemReduction << < numBins, 1024, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
+	//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	// 3rd attempt - 128 blocks of 1 thread - each threads computes the histogram of a numElems/32 size segment
+	Segmented_SharedMemReduction2 << < 64, 256, numBins * sizeof(unsigned int) >> >(d_vals, d_histo, numBins, numElems);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 }
