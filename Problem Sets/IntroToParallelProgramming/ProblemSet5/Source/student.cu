@@ -27,8 +27,11 @@
 
 #include "utils.h"
 
-__global__
-void Serial_SharedMem(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
+/////////////////////////////// Forward Declarations ////////////////////
+__device__ void Reduce(unsigned int* const array);
+
+/////////////////////////////// CUDA Kernels ////////////////////////////
+__global__ void Serial_SharedMem(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
 {	
 	extern __shared__ unsigned int histogram[];	
 
@@ -39,8 +42,54 @@ void Serial_SharedMem(const unsigned int* const vals, unsigned int* const histo,
 	for (unsigned int i = 0; i < numBins; i++) histo[i] = histogram[i];
 }
 
+__global__ void SingleBlockPerBin_SharedMemReduction(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
+{
+	extern __shared__ unsigned int binPredicates[];
+
+	auto blockSize = blockDim.x;
+	auto binId = blockIdx.x;
+	auto threadId = threadIdx.x;
+	auto numIterations = numElems / blockSize;
+	unsigned int totalSum = 0;
+
+	for (size_t i = 0; i < numIterations; i++)
+	{
+		auto index = threadId + i * blockSize;
+		binPredicates[threadId] = vals[index] == binId ? 1 : 0;
+		__syncthreads();
+		Reduce(binPredicates);
+		totalSum += binPredicates[0];
+	}
+
+	if (threadId == 0) histo[binId] = totalSum;
+}
+
+/////////////////////////////// CUDA Device Methods /////////////////////
+__device__ void Reduce(unsigned int* const array)
+{
+	auto blockSize = blockDim.x;
+	auto threadId = threadIdx.x;
+
+	for (size_t participatingThreads = blockSize / 2; participatingThreads > 0; participatingThreads /= 2)
+	{
+		if (threadId < participatingThreads)
+		{
+			auto right = array[threadId + participatingThreads];
+			auto left = array[threadId];
+			array[threadId] = left + right;
+		}
+		__syncthreads();
+	}
+}
+
 void computeHistogram(const unsigned int* const d_vals, unsigned int* const d_histo, const unsigned int numBins, const unsigned int numElems)
 {
-	Serial_SharedMem << <1, 1, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
+	// 1st attempt - single thread with shared memory
+	//Serial_SharedMem << <1, 1, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
+	//cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	// 2nd attemept - 1024 blocks X 1024 threads - each block responsible of a different bin, with reduction in shared memory
+	assert(1024 * (numElems / 1024) == numElems);
+	SingleBlockPerBin_SharedMemReduction << < numBins, 1024, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 }
