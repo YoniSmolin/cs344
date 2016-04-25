@@ -25,7 +25,7 @@ void computeHistogram(const unsigned int *const d_vals,
 int main(void)
 {
   const unsigned int numBins = 1024;
-  const unsigned int numElems = 10000 * numBins;
+  const unsigned int numElems = 10000 * numBins; // 10M elements
   const float stddev = 100.f;
 
   unsigned int *vals = new unsigned int[numElems];
@@ -47,7 +47,7 @@ int main(void)
   unsigned int mean = rand() % 100 + 462;
 
   //Output mean so that grading can happen with the same inputs
-  std::cout << mean << std::endl;
+  std::cout << "Distribution's mean value: " << mean << std::endl;
 
   thrust::minstd_rand rng;
 

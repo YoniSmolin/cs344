@@ -28,27 +28,19 @@
 #include "utils.h"
 
 __global__
-void yourHisto(const unsigned int* const vals, //INPUT
-               unsigned int* const histo,      //OUPUT
-               int numVals)
-{
-  //TODO fill in this kernel to calculate the histogram
-  //as quickly as possible
+void Serial_SharedMem(const unsigned int* const vals, unsigned int* const histo, const unsigned int numBins, const unsigned int numElems)
+{	
+	extern __shared__ unsigned int histogram[];	
 
-  //Although we provide only one kernel skeleton,
-  //feel free to use more if it will help you
-  //write faster code
+	for (unsigned int i = 0; i < numBins; i++) histogram[i] = 0;
+
+	for (unsigned int i = 0; i < numElems; i++) histogram[vals[i]]++;
+
+	for (unsigned int i = 0; i < numBins; i++) histo[i] = histogram[i];
 }
 
-void computeHistogram(const unsigned int* const d_vals, //INPUT
-                      unsigned int* const d_histo,      //OUTPUT
-                      const unsigned int numBins,
-                      const unsigned int numElems)
+void computeHistogram(const unsigned int* const d_vals, unsigned int* const d_histo, const unsigned int numBins, const unsigned int numElems)
 {
-  //TODO Launch the yourHisto kernel
-
-  //if you want to use/launch more than one kernel,
-  //feel free
-
-  cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	Serial_SharedMem << <1, 1, numBins * sizeof(unsigned int) >> > (d_vals, d_histo, numBins, numElems);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 }
