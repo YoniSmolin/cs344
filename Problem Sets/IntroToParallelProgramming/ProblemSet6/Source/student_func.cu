@@ -62,24 +62,50 @@
     In this assignment we will do 800 iterations.
    */
 
-
-
 #include "utils.h"
 #include <thrust/host_vector.h>
 
-void your_blend(const uchar4* const h_sourceImg,  //IN
-                const size_t numRowsSource, const size_t numColsSource,
-                const uchar4* const h_destImg, //IN
-                uchar4* const h_blendedImg) //OUT
+const size_t BLOCK_DIM = 32;
+
+//////////////////////////// Forward Declarations /////////////////////////
+__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, bool* const d_mask)
 {
+	size_t rowIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t columnIndex = threadIdx.y + blockDim.y * blockIdx.y;
 
-  /* To Recap here are the steps you need to implement
-  
-     1) Compute a mask of the pixels from the source image to be copied
-        The pixels that shouldn't be copied are completely white, they
-        have R=255, G=255, B=255.  Any other pixels SHOULD be copied.
+	size_t imageIndex = rowIndex * numColsSource + columnIndex;
 
-     2) Compute the interior and border regions of the mask.  An interior
+	uchar4 pixel = d_sourceImg[imageIndex];
+
+	d_mask[imageIndex] = !((pixel.x == 255) && (pixel.y == 255) && (pixel.z == 255));
+}
+
+//////////////////////////// Host Code ////////////////////////////////////
+void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, const size_t numColsSource, const uchar4* const h_destImg, uchar4* const h_blendedImg)
+{
+	// define grid dimensions
+	size_t numPixels = numRowsSource * numColsSource;
+	size_t blocksPerRow = (numColsSource + BLOCK_DIM - 1) / BLOCK_DIM;
+	size_t blocksPerColumn = (numRowsSource + BLOCK_DIM - 1) / BLOCK_DIM;	
+	dim3 blockGrid(blocksPerRow, blocksPerColumn, 1);
+	dim3 threadGrid(BLOCK_DIM, BLOCK_DIM, 1);
+
+	// 1 - Compute a mask 
+	bool* d_mask;
+	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(bool)));
+
+	uchar4* d_sourceImage;
+	checkCudaErrors(cudaMalloc(&d_sourceImage, numPixels * sizeof(uchar4)));
+	checkCudaErrors(cudaMemcpy(d_sourceImage, h_sourceImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
+	
+	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numRowsSource, numColsSource, d_mask);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	//bool* h_mask = new bool[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
+	//delete[] h_mask;
+
+/*     2) Compute the interior and border regions of the mask.  An interior
         pixel has all 4 neighbors also inside the mask.  A border pixel is
         in the mask itself, but has at least one neighbor that isn't.
 
@@ -110,4 +136,5 @@ void your_blend(const uchar4* const h_sourceImg,  //IN
 
       to catch any errors that happened while executing the kernel.
   */
+	checkCudaErrors(cudaFree(d_mask));
 }
