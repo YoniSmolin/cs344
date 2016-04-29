@@ -66,9 +66,15 @@
 #include <thrust/host_vector.h>
 
 const size_t BLOCK_DIM = 32;
+const unsigned int INTERIOR = 1;
+const unsigned int BORDER = 2;
+const unsigned int EXTERIOR = 0;
 
 //////////////////////////// Forward Declarations /////////////////////////
-__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, bool* const d_mask)
+bool* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels);
+
+//////////////////////////// CUDA Kernels /////////////////////////////////
+__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numColsSource, bool* const d_mask)
 {
 	size_t rowIndex = threadIdx.x + blockDim.x * blockIdx.x;
 	size_t columnIndex = threadIdx.y + blockDim.y * blockIdx.y;
@@ -90,26 +96,18 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	dim3 blockGrid(blocksPerRow, blocksPerColumn, 1);
 	dim3 threadGrid(BLOCK_DIM, BLOCK_DIM, 1);
 
-	// 1 - Compute a mask 
-	bool* d_mask;
-	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(bool)));
-
+	// move input image to device
 	uchar4* d_sourceImage;
 	checkCudaErrors(cudaMalloc(&d_sourceImage, numPixels * sizeof(uchar4)));
 	checkCudaErrors(cudaMemcpy(d_sourceImage, h_sourceImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
-	
-	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numRowsSource, numColsSource, d_mask);
-	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	//bool* h_mask = new bool[numPixels];
-	//checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
-	//delete[] h_mask;
+	// 1 - Compute the interior mask 	
+	bool* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numPixels);
 
-/*     2) Compute the interior and border regions of the mask.  An interior
-        pixel has all 4 neighbors also inside the mask.  A border pixel is
-        in the mask itself, but has at least one neighbor that isn't.
+    // 2 - Compute the interior and border regions of the mask
 
-     3) Separate out the incoming image into three separate channels
+
+  /*   3) Separate out the incoming image into three separate channels
 
      4) Create two float(!) buffers for each color channel that will
         act as our guesses.  Initialize them to the respective color
@@ -137,4 +135,19 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
       to catch any errors that happened while executing the kernel.
   */
 	checkCudaErrors(cudaFree(d_mask));
+}
+
+bool* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels)
+{
+	bool* d_mask;
+	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(bool)));
+
+	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numColsSource, d_mask);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	bool* h_mask = new bool[numPixels];
+	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
+	delete[] h_mask;
+
+	return d_mask;
 }
