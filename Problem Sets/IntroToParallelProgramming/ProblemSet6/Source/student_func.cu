@@ -73,6 +73,7 @@ const unsigned char EXTERIOR = 0;
 //////////////////////////// Forward Declarations /////////////////////////
 unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource);
 unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned char* const d_mask, size_t numColsSource, size_t numRowsSource);
+void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource, unsigned char*& d_red, unsigned char*& d_green, unsigned char*& d_blue);
 
 //////////////////////////// CUDA Kernels /////////////////////////////////
 __global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, unsigned char* const d_mask)
@@ -117,13 +118,29 @@ __global__ void ComputeRegionMap(const unsigned char* const d_mask, const size_t
 	}
 }
 
-//////////////////////////// Host Code ////////////////////////////////////
+__global__ void SeparateToChannels(const uchar4* const d_sourceImage, size_t numRowsSource, size_t numColsSource, unsigned char* d_red, unsigned char* d_green, unsigned char* d_blue)
+{
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
+
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		uchar4 pixelValue = d_sourceImage[imageIndex];
+
+		d_red[imageIndex] = pixelValue.x;
+		d_green[imageIndex] = pixelValue.y;
+		d_blue[imageIndex] = pixelValue.z;
+	}
+}
+
+//////////////////////////// Main Function ////////////////////////////////////
 void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, const size_t numColsSource, const uchar4* const h_destImg, uchar4* const h_blendedImg)
 {
 	// define grid dimensions
 	size_t numPixels = numRowsSource * numColsSource;
 	size_t blocksPerRow = (numColsSource + BLOCK_DIM - 1) / BLOCK_DIM;
-	size_t blocksPerColumn = (numRowsSource + BLOCK_DIM - 1) / BLOCK_DIM;	
+	size_t blocksPerColumn = (numRowsSource + BLOCK_DIM - 1) / BLOCK_DIM;
 	dim3 blockGrid(blocksPerRow, blocksPerColumn, 1);
 	dim3 threadGrid(BLOCK_DIM, BLOCK_DIM, 1);
 
@@ -138,13 +155,13 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
     // 2 - Compute the interior and border regions of the mask
 	unsigned char* d_regionMap = ComputeRegionMap(blockGrid, threadGrid, d_mask, numColsSource, numPixels);
 
-  /*   3) Separate out the incoming image into three separate channels
+    // 3 - Separate out the incoming image into three channels
+	unsigned char *d_red, *d_green, *d_blue;
+	SeparateToChannels(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource, d_red, d_green, d_blue);
 
-     4) Create two float(!) buffers for each color channel that will
-        act as our guesses.  Initialize them to the respective color
-        channel of the source image since that will act as our intial guess.
+    // Create two float(!) buffers for each color channel
 
-     5) For each color channel perform the Jacobi iteration described 
+/*     5) For each color channel perform the Jacobi iteration described 
         above 800 times.
 
      6) Create the output image by replacing all the interior pixels
@@ -167,8 +184,12 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
   */
 	checkCudaErrors(cudaFree(d_mask));
 	checkCudaErrors(cudaFree(d_regionMap));
+	checkCudaErrors(cudaFree(d_red));
+	checkCudaErrors(cudaFree(d_green));
+	checkCudaErrors(cudaFree(d_blue));
 }
 
+//////////////////////////// Helper Functions /////////////////////////////////
 unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource)
 {
 	size_t numPixels = numRowsSource * numColsSource;
@@ -178,9 +199,9 @@ unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4*
 	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numRowsSource, numColsSource, d_mask);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	unsigned char* h_mask = new unsigned char[numPixels];
-	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	delete[] h_mask;
+	//unsigned char* h_mask = new unsigned char[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//delete[] h_mask;
 
 	return d_mask;
 }
@@ -191,14 +212,27 @@ unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned 
 	unsigned char* d_regionMap;
 	checkCudaErrors(cudaMalloc(&d_regionMap, numPixels * sizeof(unsigned char)));
 
-	assert(threadGrid.x == threadGrid.y);
-	size_t sharedMemDim = threadGrid.x + 2;
-	ComputeRegionMap << <blockGrid, threadGrid, sharedMemDim * sharedMemDim * sizeof(unsigned char) >> > (d_mask, numRowsSource, numColsSource, d_regionMap);
+	ComputeRegionMap << <blockGrid, threadGrid >> > (d_mask, numRowsSource, numColsSource, d_regionMap);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	unsigned char* h_regionMap = new unsigned char[numPixels];
-	checkCudaErrors(cudaMemcpy(h_regionMap, d_regionMap, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
-	delete[] h_regionMap;
+	//unsigned char* h_regionMap = new unsigned char[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_regionMap, d_regionMap, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//delete[] h_regionMap;
 
 	return d_regionMap;
+} 
+
+void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource, unsigned char*& d_red, unsigned char*& d_green, unsigned char*& d_blue)
+{
+	size_t numPixels = numRowsSource * numColsSource;
+	checkCudaErrors(cudaMalloc(&d_red, numPixels * sizeof(unsigned char)));
+	checkCudaErrors(cudaMalloc(&d_green, numPixels * sizeof(unsigned char)));
+	checkCudaErrors(cudaMalloc(&d_blue, numPixels * sizeof(unsigned char)));
+
+	SeparateToChannels << <blockGrid, threadGrid >> > (d_sourceImage, numRowsSource, numColsSource, d_red, d_green, d_blue);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	//unsigned char* h_red = new unsigned char[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_red, d_red, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//delete[] h_red;
 }
