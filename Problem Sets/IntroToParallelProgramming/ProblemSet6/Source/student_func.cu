@@ -66,15 +66,15 @@
 #include <thrust/host_vector.h>
 
 const size_t BLOCK_DIM = 32;
-const unsigned int INTERIOR = 1;
-const unsigned int BORDER = 2;
-const unsigned int EXTERIOR = 0;
+const unsigned char INTERIOR = 1;
+const unsigned char BORDER = 2;
+const unsigned char EXTERIOR = 0;
 
 //////////////////////////// Forward Declarations /////////////////////////
-bool* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels);
+unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels);
 
 //////////////////////////// CUDA Kernels /////////////////////////////////
-__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numColsSource, bool* const d_mask)
+__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numColsSource, unsigned char* const d_mask)
 {
 	size_t rowIndex = threadIdx.x + blockDim.x * blockIdx.x;
 	size_t columnIndex = threadIdx.y + blockDim.y * blockIdx.y;
@@ -83,7 +83,7 @@ __global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numCol
 
 	uchar4 pixel = d_sourceImg[imageIndex];
 
-	d_mask[imageIndex] = !((pixel.x == 255) && (pixel.y == 255) && (pixel.z == 255));
+	d_mask[imageIndex] = ((pixel.x == 255) && (pixel.y == 255) && (pixel.z == 255)) ? EXTERIOR : INTERIOR;
 }
 
 //////////////////////////// Host Code ////////////////////////////////////
@@ -102,7 +102,7 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaMemcpy(d_sourceImage, h_sourceImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
 
 	// 1 - Compute the interior mask 	
-	bool* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numPixels);
+	unsigned char* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numPixels);
 
     // 2 - Compute the interior and border regions of the mask
 
@@ -137,17 +137,32 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaFree(d_mask));
 }
 
-bool* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels)
+unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels)
 {
-	bool* d_mask;
-	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(bool)));
+	unsigned char* d_mask;
+	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(unsigned char)));
 
 	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numColsSource, d_mask);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-	bool* h_mask = new bool[numPixels];
-	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
+	unsigned char* h_mask = new unsigned char[numPixels];
+	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
 	delete[] h_mask;
 
 	return d_mask;
 }
+
+//unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const bool* const d_mask, size_t numColsSource, size_t numPixels)
+//{
+//	bool* d_regionMap;
+//	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(unsigned char)));
+//
+//	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numColsSource, d_mask);
+//	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+//
+//	bool* h_mask = new bool[numPixels];
+//	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
+//	delete[] h_mask;
+//
+//	return d_mask;
+//}
