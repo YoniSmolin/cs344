@@ -71,19 +71,50 @@ const unsigned char BORDER = 2;
 const unsigned char EXTERIOR = 0;
 
 //////////////////////////// Forward Declarations /////////////////////////
-unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels);
+unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource);
+unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned char* const d_mask, size_t numColsSource, size_t numRowsSource);
 
 //////////////////////////// CUDA Kernels /////////////////////////////////
-__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numColsSource, unsigned char* const d_mask)
+__global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, unsigned char* const d_mask)
 {
-	size_t rowIndex = threadIdx.x + blockDim.x * blockIdx.x;
-	size_t columnIndex = threadIdx.y + blockDim.y * blockIdx.y;
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
 
-	size_t imageIndex = rowIndex * numColsSource + columnIndex;
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		uchar4 pixel = d_sourceImg[imageIndex];
+		d_mask[imageIndex] = ((pixel.x == 255) && (pixel.y == 255) && (pixel.z == 255)) ? EXTERIOR : INTERIOR;
+	}
+}
 
-	uchar4 pixel = d_sourceImg[imageIndex];
+__global__ void ComputeRegionMap(const unsigned char* const d_mask, const size_t numRowsSource, const size_t numColsSource, unsigned char* const d_regionMap)
+{
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
 
-	d_mask[imageIndex] = ((pixel.x == 255) && (pixel.y == 255) && (pixel.z == 255)) ? EXTERIOR : INTERIOR;
+	bool firstRow = rowIndex == 0;
+	bool lastRow = rowIndex == numRowsSource - 1;
+	bool firstColumn = columnIndex == 0;
+	bool lastColumn = columnIndex == numColsSource - 1;
+
+
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		unsigned char maskValue = d_mask[imageIndex];
+		d_regionMap[imageIndex] = maskValue;
+
+		if (maskValue == INTERIOR && !firstRow && !lastRow && !firstColumn && !lastColumn)
+		{						
+			unsigned char up = d_mask[imageIndex - numColsSource];
+			unsigned char down = d_mask[imageIndex + numColsSource];
+			unsigned char right = d_mask[imageIndex + 1];
+			unsigned char left = d_mask[imageIndex - 1];
+
+			if ((up & down & right & left) == 0) d_regionMap[imageIndex] = BORDER;
+		}
+	}
 }
 
 //////////////////////////// Host Code ////////////////////////////////////
@@ -102,10 +133,10 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaMemcpy(d_sourceImage, h_sourceImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
 
 	// 1 - Compute the interior mask 	
-	unsigned char* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numPixels);
+	unsigned char* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource);
 
     // 2 - Compute the interior and border regions of the mask
-
+	unsigned char* d_regionMap = ComputeRegionMap(blockGrid, threadGrid, d_mask, numColsSource, numPixels);
 
   /*   3) Separate out the incoming image into three separate channels
 
@@ -135,14 +166,16 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
       to catch any errors that happened while executing the kernel.
   */
 	checkCudaErrors(cudaFree(d_mask));
+	checkCudaErrors(cudaFree(d_regionMap));
 }
 
-unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numPixels)
+unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource)
 {
+	size_t numPixels = numRowsSource * numColsSource;
 	unsigned char* d_mask;
 	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(unsigned char)));
 
-	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numColsSource, d_mask);
+	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numRowsSource, numColsSource, d_mask);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 	unsigned char* h_mask = new unsigned char[numPixels];
@@ -152,17 +185,20 @@ unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4*
 	return d_mask;
 }
 
-//unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const bool* const d_mask, size_t numColsSource, size_t numPixels)
-//{
-//	bool* d_regionMap;
-//	checkCudaErrors(cudaMalloc(&d_mask, numPixels * sizeof(unsigned char)));
-//
-//	ComputeMask << <blockGrid, threadGrid >> > (d_sourceImage, numColsSource, d_mask);
-//	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-//
-//	bool* h_mask = new bool[numPixels];
-//	checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(bool), cudaMemcpyDeviceToHost));
-//	delete[] h_mask;
-//
-//	return d_mask;
-//}
+unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned char* const d_mask, size_t numColsSource, size_t numRowsSource)
+{
+	size_t numPixels = numRowsSource * numColsSource;
+	unsigned char* d_regionMap;
+	checkCudaErrors(cudaMalloc(&d_regionMap, numPixels * sizeof(unsigned char)));
+
+	assert(threadGrid.x == threadGrid.y);
+	size_t sharedMemDim = threadGrid.x + 2;
+	ComputeRegionMap << <blockGrid, threadGrid, sharedMemDim * sharedMemDim * sizeof(unsigned char) >> > (d_mask, numRowsSource, numColsSource, d_regionMap);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	unsigned char* h_regionMap = new unsigned char[numPixels];
+	checkCudaErrors(cudaMemcpy(h_regionMap, d_regionMap, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	delete[] h_regionMap;
+
+	return d_regionMap;
+}
