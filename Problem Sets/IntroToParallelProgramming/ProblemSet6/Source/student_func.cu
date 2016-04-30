@@ -74,6 +74,7 @@ const unsigned char EXTERIOR = 0;
 unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource);
 unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned char* const d_mask, size_t numColsSource, size_t numRowsSource);
 void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource, unsigned char*& d_red, unsigned char*& d_green, unsigned char*& d_blue);
+void InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source, float* const d_target);
 
 //////////////////////////// CUDA Kernels /////////////////////////////////
 __global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, unsigned char* const d_mask)
@@ -134,6 +135,18 @@ __global__ void SeparateToChannels(const uchar4* const d_sourceImage, size_t num
 	}
 }
 
+__global__ void Copy(const unsigned char* const source, size_t numRowsSource, size_t numColsSource, float* const target)
+{
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
+
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		target[imageIndex] = (float)source[imageIndex];
+	}
+}
+
 //////////////////////////// Main Function ////////////////////////////////////
 void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, const size_t numColsSource, const uchar4* const h_destImg, uchar4* const h_blendedImg)
 {
@@ -159,7 +172,15 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	unsigned char *d_red, *d_green, *d_blue;
 	SeparateToChannels(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource, d_red, d_green, d_blue);
 
-    // Create two float(!) buffers for each color channel
+    // 4 - Create two float(!) buffers for each color channel
+	float *d_redSource = NULL, *d_greenSource = NULL, *d_blueSource = NULL, *d_redTarget = NULL, *d_greenTarget = NULL, *d_blueTarget = NULL;
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_red, d_redSource);
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_red, d_redTarget);
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_green, d_greenSource);
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_green, d_greenTarget);
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blue, d_blueSource);
+	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blue, d_blueTarget);
+
 
 /*     5) For each color channel perform the Jacobi iteration described 
         above 800 times.
@@ -187,6 +208,12 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaFree(d_red));
 	checkCudaErrors(cudaFree(d_green));
 	checkCudaErrors(cudaFree(d_blue));
+	checkCudaErrors(cudaFree(d_redSource));
+	checkCudaErrors(cudaFree(d_greenSource));
+	checkCudaErrors(cudaFree(d_blueSource));
+	checkCudaErrors(cudaFree(d_redTarget));
+	checkCudaErrors(cudaFree(d_greenTarget));
+	checkCudaErrors(cudaFree(d_blueTarget));
 }
 
 //////////////////////////// Helper Functions /////////////////////////////////
@@ -235,4 +262,17 @@ void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_s
 	//unsigned char* h_red = new unsigned char[numPixels];
 	//checkCudaErrors(cudaMemcpy(h_red, d_red, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
 	//delete[] h_red;
+}
+
+void InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source, float* d_target)
+{
+	size_t numPixels = numRowsSource * numColsSource;
+	checkCudaErrors(cudaMalloc(&d_target, numPixels * sizeof(float)));
+	
+	Copy << <blockGrid, threadGrid >> > (d_source, numRowsSource, numColsSource, d_target);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	//float* h_target = new float[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_target, d_target, numPixels * sizeof(float), cudaMemcpyDeviceToHost));
+	//delete[] h_target;
 }
