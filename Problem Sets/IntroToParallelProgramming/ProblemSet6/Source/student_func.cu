@@ -70,11 +70,17 @@ const unsigned char INTERIOR = 1;
 const unsigned char BORDER = 2;
 const unsigned char EXTERIOR = 0;
 
+const unsigned int LOOP_ITERATIONS = 800;
+
 //////////////////////////// Forward Declarations /////////////////////////
 unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource);
 unsigned char* ComputeRegionMap(dim3 blockGrid, dim3 threadGrid, const unsigned char* const d_mask, size_t numColsSource, size_t numRowsSource);
 void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource, unsigned char*& d_red, unsigned char*& d_green, unsigned char*& d_blue);
-void InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source, float* const d_target);
+float* InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source);
+void PerformJacobiLoop(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource,
+					   const unsigned char const* d_regionMap, float* d_current, float* d_next, const unsigned char const* d_source, const unsigned char const* d_target);
+
+__device__ float Sum1SubComponent(const unsigned char const* d_regionMap, const float const* d_current, const unsigned char const* d_dest, size_t index);
 
 //////////////////////////// CUDA Kernels /////////////////////////////////
 __global__ void ComputeMask(const uchar4* const d_sourceImg, const size_t numRowsSource, const size_t numColsSource, unsigned char* const d_mask)
@@ -114,7 +120,8 @@ __global__ void ComputeRegionMap(const unsigned char* const d_mask, const size_t
 			unsigned char right = d_mask[imageIndex + 1];
 			unsigned char left = d_mask[imageIndex - 1];
 
-			if ((up & down & right & left) == 0) d_regionMap[imageIndex] = BORDER;
+			// at least one neighbour is an EXTERIOR pixel
+			if (up == EXTERIOR ||down == EXTERIOR || right == EXTERIOR || left == EXTERIOR) d_regionMap[imageIndex] = BORDER;
 		}
 	}
 }
@@ -147,6 +154,41 @@ __global__ void Copy(const unsigned char* const source, size_t numRowsSource, si
 	}
 }
 
+__global__ void JacobiIteration(size_t numColsSource, size_t numRowsSource, const unsigned char const* d_regionMap, 
+								float* d_current, float* d_next, const unsigned char const* d_source, const unsigned char const* d_target)
+{
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
+
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		
+		if (d_regionMap[imageIndex] == INTERIOR)
+		{
+			size_t up = imageIndex - numColsSource;
+			size_t down = imageIndex + numColsSource;
+			size_t left = imageIndex - 1;
+			size_t right = imageIndex + 1;
+
+			float Sum1 = Sum1SubComponent(d_regionMap, d_current, d_target, left) + 
+					     Sum1SubComponent(d_regionMap, d_current, d_target, right) +
+						 Sum1SubComponent(d_regionMap, d_current, d_target, up) + 
+						 Sum1SubComponent(d_regionMap, d_current, d_target, down);
+
+			float Sum2 = 4 * d_source[imageIndex] - (d_source[up] + d_source[down] + d_source[left] + d_source[right]);
+
+			float newVal = (Sum1 + Sum2) / 4.f;
+			d_next[imageIndex] = fminf(255, fmaxf(0, newVal));
+		}
+	}
+}
+
+__device__ float Sum1SubComponent(const unsigned char const* d_regionMap, const float const* d_current, const unsigned char const* d_dest, size_t index)
+{
+	return d_regionMap[index] == INTERIOR ? d_current[index] : d_dest[index];
+}
+
 //////////////////////////// Main Function ////////////////////////////////////
 void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, const size_t numColsSource, const uchar4* const h_destImg, uchar4* const h_blendedImg)
 {
@@ -162,6 +204,10 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaMalloc(&d_sourceImage, numPixels * sizeof(uchar4)));
 	checkCudaErrors(cudaMemcpy(d_sourceImage, h_sourceImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
 
+	uchar4* d_targetImage;
+	checkCudaErrors(cudaMalloc(&d_targetImage, numPixels * sizeof(uchar4)));
+	checkCudaErrors(cudaMemcpy(d_targetImage, h_destImg, numPixels * sizeof(uchar4), cudaMemcpyHostToDevice));
+
 	// 1 - Compute the interior mask 	
 	unsigned char* d_mask = ComputInteriorMask(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource);
 
@@ -169,51 +215,47 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	unsigned char* d_regionMap = ComputeRegionMap(blockGrid, threadGrid, d_mask, numColsSource, numPixels);
 
     // 3 - Separate out the incoming image into three channels
-	unsigned char *d_red, *d_green, *d_blue;
-	SeparateToChannels(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource, d_red, d_green, d_blue);
+	unsigned char *d_redSource, *d_greenSource, *d_blueSource, *d_redTarget, *d_greenTarget, *d_blueTarget;
+	SeparateToChannels(blockGrid, threadGrid, d_sourceImage, numColsSource, numRowsSource, d_redSource, d_greenSource, d_blueSource);
+	SeparateToChannels(blockGrid, threadGrid, d_targetImage, numColsSource, numRowsSource, d_redTarget, d_greenTarget, d_blueTarget);
 
     // 4 - Create two float(!) buffers for each color channel
-	float *d_redSource = NULL, *d_greenSource = NULL, *d_blueSource = NULL, *d_redTarget = NULL, *d_greenTarget = NULL, *d_blueTarget = NULL;
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_red, d_redSource);
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_red, d_redTarget);
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_green, d_greenSource);
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_green, d_greenTarget);
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blue, d_blueSource);
-	InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blue, d_blueTarget);
+	float* d_redCurrent = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_redSource);
+	float* d_redNext = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_redSource);
+	float* d_greenCurrent = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_greenSource);
+	float* d_greenNext = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_greenSource);
+	float* d_blueCurrent = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blueSource);
+	float* d_blueNext = InitializeChannelBuffer(blockGrid, threadGrid, numColsSource, numRowsSource, d_blueSource);
 
+    // 5 - For each color channel perform the Jacobi iteration described above 800 times.
+	PerformJacobiLoop(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_redCurrent, d_redNext, d_redSource, d_redTarget);
+	PerformJacobiLoop(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_greenCurrent, d_greenNext, d_greenSource, d_greenTarget);
+	PerformJacobiLoop(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_blueCurrent, d_blueNext, d_blueSource, d_blueTarget);
 
-/*     5) For each color channel perform the Jacobi iteration described 
-        above 800 times.
-
-     6) Create the output image by replacing all the interior pixels
+  /* 6) Create the output image by replacing all the interior pixels
         in the destination image with the result of the Jacobi iterations.
         Just cast the floating point values to unsigned chars since we have
         already made sure to clamp them to the correct range.
-
-      Since this is final assignment we provide little boilerplate code to
-      help you.  Notice that all the input/output pointers are HOST pointers.
-
-      You will have to allocate all of your own GPU memory and perform your own
-      memcopies to get data in and out of the GPU memory.
-
-      Remember to wrap all of your calls with checkCudaErrors() to catch any
-      thing that might go wrong.  After each kernel call do:
-
-      cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-      to catch any errors that happened while executing the kernel.
   */
+
+	#pragma region cudaFree()
+	checkCudaErrors(cudaFree(d_sourceImage));
+	checkCudaErrors(cudaFree(d_targetImage));
 	checkCudaErrors(cudaFree(d_mask));
 	checkCudaErrors(cudaFree(d_regionMap));
-	checkCudaErrors(cudaFree(d_red));
-	checkCudaErrors(cudaFree(d_green));
-	checkCudaErrors(cudaFree(d_blue));
 	checkCudaErrors(cudaFree(d_redSource));
 	checkCudaErrors(cudaFree(d_greenSource));
 	checkCudaErrors(cudaFree(d_blueSource));
 	checkCudaErrors(cudaFree(d_redTarget));
 	checkCudaErrors(cudaFree(d_greenTarget));
 	checkCudaErrors(cudaFree(d_blueTarget));
+	checkCudaErrors(cudaFree(d_redCurrent));
+	checkCudaErrors(cudaFree(d_greenCurrent));
+	checkCudaErrors(cudaFree(d_blueCurrent));
+	checkCudaErrors(cudaFree(d_redNext));
+	checkCudaErrors(cudaFree(d_greenNext));
+	checkCudaErrors(cudaFree(d_blueNext));
+	#pragma endregion
 }
 
 //////////////////////////// Helper Functions /////////////////////////////////
@@ -264,15 +306,39 @@ void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_s
 	//delete[] h_red;
 }
 
-void InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source, float* d_target)
+float* InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source)
 {
 	size_t numPixels = numRowsSource * numColsSource;
-	checkCudaErrors(cudaMalloc(&d_target, numPixels * sizeof(float)));
-	
+	float* d_target;
+	checkCudaErrors(cudaMalloc(&d_target, numPixels * sizeof(float)));	
+
 	Copy << <blockGrid, threadGrid >> > (d_source, numRowsSource, numColsSource, d_target);
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 	//float* h_target = new float[numPixels];
 	//checkCudaErrors(cudaMemcpy(h_target, d_target, numPixels * sizeof(float), cudaMemcpyDeviceToHost));
 	//delete[] h_target;
+
+	return d_target;
+}
+
+void PerformJacobiLoop(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, 
+					   const unsigned char const* d_regionMap, float* d_current, float* d_next, const unsigned char const* d_source, const unsigned char const* d_target)
+{
+	for (unsigned int i = 0; i < LOOP_ITERATIONS; i++)
+	{
+		// perform a single iteration
+		JacobiIteration << < blockGrid, threadGrid >> > (numColsSource, numRowsSource, d_regionMap, d_current, d_next, d_source, d_target);
+		cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+		//size_t numPixels = numColsSource*numRowsSource;
+		//float* h_next = new float[numPixels];
+		//checkCudaErrors(cudaMemcpy(h_next, d_next, numPixels * sizeof(float), cudaMemcpyDeviceToHost));
+		//delete[] h_next;
+
+		// swap pointers
+		float* aux = d_current;
+		d_current = d_next;
+		d_next = aux;
+	}
 }
