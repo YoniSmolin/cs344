@@ -70,7 +70,7 @@ const unsigned char INTERIOR = 1;
 const unsigned char BORDER = 2;
 const unsigned char EXTERIOR = 0;
 
-const unsigned int LOOP_ITERATIONS = 800;
+const unsigned int JACOBI_ITERATION_COUNT = 800;
 
 //////////////////////////// Forward Declarations /////////////////////////
 unsigned char* ComputInteriorMask(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_sourceImage, size_t numColsSource, size_t numRowsSource);
@@ -79,6 +79,8 @@ void SeparateToChannels(dim3 blockGrid, dim3 threadGrid, const uchar4* const d_s
 float* InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, const unsigned char* const d_source);
 void PerformJacobiLoop(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource,
 					   const unsigned char const* d_regionMap, float* d_current, float* d_next, const unsigned char const* d_source, const unsigned char const* d_target);
+uchar4* CombineChannels(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource,
+						const unsigned char* const d_regionMap, const uchar4* const d_target, const float* const d_red, const float* const d_green, const float* const d_blue);
 
 __device__ float Sum1SubComponent(const unsigned char const* d_regionMap, const float const* d_current, const unsigned char const* d_dest, size_t index);
 
@@ -189,6 +191,29 @@ __device__ float Sum1SubComponent(const unsigned char const* d_regionMap, const 
 	return d_regionMap[index] == INTERIOR ? d_current[index] : d_dest[index];
 }
 
+__global__ void CombineChannels(size_t numColsSource, size_t numRowsSource, const unsigned char* const d_regionMap, 
+								const uchar4* const d_target,const float* const d_red, const float* const d_green, const float* const d_blue, uchar4* const d_combined)
+{
+	size_t columnIndex = threadIdx.x + blockDim.x * blockIdx.x;
+	size_t rowIndex = threadIdx.y + blockDim.y * blockIdx.y;
+
+	if (rowIndex < numRowsSource && columnIndex < numColsSource)
+	{
+		size_t imageIndex = rowIndex * numColsSource + columnIndex;
+		
+		if (d_regionMap[imageIndex] == INTERIOR)
+		{
+			d_combined[imageIndex].x = d_red[imageIndex];
+			d_combined[imageIndex].y = d_green[imageIndex];
+			d_combined[imageIndex].z = d_blue[imageIndex];
+		}
+		else
+		{
+			d_combined[imageIndex] = d_target[imageIndex];
+		}
+	}
+}
+
 //////////////////////////// Main Function ////////////////////////////////////
 void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, const size_t numColsSource, const uchar4* const h_destImg, uchar4* const h_blendedImg)
 {
@@ -232,11 +257,12 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	PerformJacobiLoop(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_greenCurrent, d_greenNext, d_greenSource, d_greenTarget);
 	PerformJacobiLoop(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_blueCurrent, d_blueNext, d_blueSource, d_blueTarget);
 
-  /* 6) Create the output image by replacing all the interior pixels
-        in the destination image with the result of the Jacobi iterations.
-        Just cast the floating point values to unsigned chars since we have
-        already made sure to clamp them to the correct range.
-  */
+	assert(JACOBI_ITERATION_COUNT % 2 == 0);
+
+    // 6 - Create the output image
+	uchar4* d_combined = CombineChannels(blockGrid, threadGrid, numColsSource, numRowsSource, d_regionMap, d_targetImage, d_redCurrent, d_greenCurrent, d_blueCurrent);
+	checkCudaErrors(cudaMemcpy(h_blendedImg, d_combined, numPixels * sizeof(uchar4), cudaMemcpyDeviceToHost));
+
 
 	#pragma region cudaFree()
 	checkCudaErrors(cudaFree(d_sourceImage));
@@ -255,6 +281,7 @@ void your_blend(const uchar4* const h_sourceImg,  const size_t numRowsSource, co
 	checkCudaErrors(cudaFree(d_redNext));
 	checkCudaErrors(cudaFree(d_greenNext));
 	checkCudaErrors(cudaFree(d_blueNext));
+	checkCudaErrors(cudaFree(d_combined));
 	#pragma endregion
 }
 
@@ -325,7 +352,7 @@ float* InitializeChannelBuffer(dim3 blockGrid, dim3 threadGrid, size_t numColsSo
 void PerformJacobiLoop(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, 
 					   const unsigned char const* d_regionMap, float* d_current, float* d_next, const unsigned char const* d_source, const unsigned char const* d_target)
 {
-	for (unsigned int i = 0; i < LOOP_ITERATIONS; i++)
+	for (unsigned int i = 0; i < JACOBI_ITERATION_COUNT; i++)
 	{
 		// perform a single iteration
 		JacobiIteration << < blockGrid, threadGrid >> > (numColsSource, numRowsSource, d_regionMap, d_current, d_next, d_source, d_target);
@@ -341,4 +368,26 @@ void PerformJacobiLoop(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, si
 		d_current = d_next;
 		d_next = aux;
 	}
+
+	// undo final swap
+	float* aux = d_current;
+	d_current = d_next;
+	d_next = aux;
+}
+
+uchar4* CombineChannels(dim3 blockGrid, dim3 threadGrid, size_t numColsSource, size_t numRowsSource, 
+						const unsigned char* const d_regionMap, const uchar4* const d_target, const float* const d_red, const float* const d_green, const float* const d_blue)
+{
+	size_t numPixels = numRowsSource * numColsSource;
+	uchar4* d_combined;
+	checkCudaErrors(cudaMalloc(&d_combined, numPixels * sizeof(uchar4)));
+
+	CombineChannels << <blockGrid, threadGrid >> > (numColsSource, numRowsSource, d_regionMap, d_target, d_red, d_green, d_blue, d_combined);
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	//unsigned char* h_mask = new unsigned char[numPixels];
+	//checkCudaErrors(cudaMemcpy(h_mask, d_mask, numPixels * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//delete[] h_mask;
+
+	return d_combined;
 }
